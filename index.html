@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Flipbook</title>
+  <style>
+    :root{
+      --page-radius: 18px;
+      --page-shadow: 0 18px 45px rgba(0,0,0,0.28);
+      --inner-shadow: inset 0 0 0 1px rgba(255,255,255,0.10);
+      --paper: #f4f1ea;
+      --bg: #111;
+      --spread-ar: 2970 / 2056; /* full slide aspect ratio */
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: radial-gradient(1200px 700px at 50% 40%, #1a1a1a, var(--bg));
+      overflow: hidden;
+      touch-action: none; /* we handle gestures */
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+
+    .stage{
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      box-sizing: border-box;
+    }
+
+    /* Outer book frame */
+    .book{
+      width: min(92vw, 1200px);
+      aspect-ratio: var(--spread-ar); /* match 2970x2056 to avoid stretch */
+      position: relative;
+      perspective: 1600px;
+      user-select: none;
+    }
+
+    /* Spread is the visible surface area */
+    .spread{
+      position:absolute; inset:0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0;
+    }
+
+    .slot{
+      position: relative;
+      overflow: visible;
+    }
+
+    /* A static page */
+    .page{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      box-shadow: var(--page-shadow), var(--inner-shadow);
+      background: var(--paper);
+      overflow: hidden;
+      transform: translateZ(0); /* keep crisp */
+    }
+
+    /* Image-cropped page face */
+    .pageFace{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      background-repeat: no-repeat;
+      background-size: 200% 100%;   /* double spread */
+      background-position: 0% 0%;
+      background-color: var(--paper);
+      filter: saturate(1.02) contrast(1.02);
+    }
+
+    /* Optional overlay for subtle paper shading */
+    .pageTint{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      background: linear-gradient(90deg, rgba(0,0,0,0.06), rgba(0,0,0,0.00) 28%, rgba(0,0,0,0.03));
+      pointer-events:none;
+      mix-blend-mode: multiply;
+      opacity: 0.6;
+    }
+
+    /* Flipping leaf */
+    .leaf{
+      position:absolute;
+      top:0; bottom:0;
+      width: 50%;
+      transform-style: preserve-3d;
+      z-index: 150;
+      pointer-events: none; /* we track gesture on book */
+    }
+
+    /* For the front/back faces of the flipping leaf */
+    .leafFace{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      overflow:hidden;
+      backface-visibility: hidden;
+      box-shadow: var(--page-shadow), var(--inner-shadow);
+      background: var(--paper);
+    }
+
+    .leafFace .pageFace{ border-radius: var(--page-radius); }
+
+    /* Back face flips */
+    .leafBack{
+      transform: rotateY(180deg);
+    }
+
+
+    /* Dynamic shadows during flip */
+    .shade{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      pointer-events:none;
+      opacity: 0;
+      transition: opacity 80ms linear;
+    }
+
+    /* forward (right->left) */
+    .shade.forward{
+      background: linear-gradient(270deg, rgba(0,0,0,0.40), rgba(0,0,0,0.05) 55%, rgba(0,0,0,0.00));
+    }
+
+    /* backward (left->right) */
+    .shade.backward{
+      background: linear-gradient(90deg, rgba(0,0,0,0.40), rgba(0,0,0,0.05) 55%, rgba(0,0,0,0.00));
+    }
+
+    /* Spine hint */
+    .spine{
+      position:absolute;
+      left:50%; top:3%; bottom:3%;
+      width: 10px;
+      transform: translateX(-50%);
+      border-radius: 10px;
+      background: linear-gradient(90deg, rgba(0,0,0,0.35), rgba(255,255,255,0.10), rgba(0,0,0,0.35));
+      opacity: 0.35;
+      pointer-events:none;
+      filter: blur(0.2px);
+    }
+
+    /* Empty side background */
+    .empty{
+      position:absolute; inset:0;
+      border-radius: var(--page-radius);
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02));
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+      opacity: 0.35;
+    }
+
+    /* Shadow handoff bridge to avoid end-of-flip jump */
+    .handoff{
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 50%;
+      pointer-events: none;
+      z-index: 120; /* above static pages, below turning leaf */
+      opacity: 0;
+      transition: opacity 140ms linear;
+      border-radius: var(--page-radius);
+      overflow: hidden;
+    }
+
+    .handoff.forward{
+      left: 50%;
+      border-top-left-radius: 0;
+      border-bottom-left-radius: 0;
+      background:
+        linear-gradient(270deg, rgba(0,0,0,0.22), rgba(0,0,0,0.10) 35%, rgba(0,0,0,0.00) 72%),
+        radial-gradient(120% 90% at 10% 50%, rgba(0,0,0,0.12), rgba(0,0,0,0.00) 70%);
+    }
+
+    .handoff.backward{
+      left: 0%;
+      border-top-right-radius: 0;
+      border-bottom-right-radius: 0;
+      background:
+        linear-gradient(90deg, rgba(0,0,0,0.22), rgba(0,0,0,0.10) 35%, rgba(0,0,0,0.00) 72%),
+        radial-gradient(120% 90% at 90% 50%, rgba(0,0,0,0.12), rgba(0,0,0,0.00) 70%);
+    }
+
+    /* HUD */
+    .hud{
+      position: fixed;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      z-index: 200;
+      pointer-events: none;
+      opacity: 0.95;
+    }
+
+    .hudPill{
+      pointer-events: auto;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.45);
+      color: rgba(255,255,255,0.92);
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      user-select: none;
+    }
+
+    .hudHint{
+      color: rgba(255,255,255,0.70);
+      font-size: 12px;
+      letter-spacing: 0.2px;
+      user-select: none;
+    }
+
+    /* Jump overlay */
+    .jumpOverlay{
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,0.55);
+      z-index: 300;
+      padding: 18px;
+      box-sizing: border-box;
+    }
+
+    .jumpOverlay.open{ display: grid; }
+
+    .jumpModal{
+      width: min(92vw, 360px);
+      border-radius: 16px;
+      background: rgba(20,20,20,0.92);
+      box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 16px;
+      box-sizing: border-box;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    .jumpTitle{
+      color: rgba(255,255,255,0.92);
+      font-size: 14px;
+      margin-bottom: 10px;
+      letter-spacing: 0.2px;
+    }
+
+    .jumpInput{
+      width: 100%;
+      border-radius: 12px;
+      padding: 12px 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.35);
+      color: rgba(255,255,255,0.92);
+      outline: none;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    .jumpRow{
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .jumpBtn{
+      flex: 1;
+      border: 0;
+      border-radius: 12px;
+      padding: 11px 10px;
+      background: rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.92);
+      cursor: pointer;
+      font-size: 13px;
+      letter-spacing: 0.2px;
+    }
+
+    .jumpBtn.ghost{
+      background: rgba(255,255,255,0.06);
+      color: rgba(255,255,255,0.82);
+    }
+
+    .jumpTip{
+      margin-top: 10px;
+      color: rgba(255,255,255,0.62);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="book" id="book">
+      <div class="spine" id="spine"></div>
+      <div class="spread" id="spread">
+        <div class="slot" id="leftSlot"></div>
+        <div class="slot" id="rightSlot"></div>
+      </div>
+    </div>
+
+    <div class="hud" id="hud">
+      <div class="hudPill" id="pageIndicator">Page 1 / 38</div>
+      <div class="hudHint" id="hudHint">← / →, Space, G to jump</div>
+    </div>
+
+    <div class="jumpOverlay" id="jumpOverlay" aria-hidden="true">
+      <div class="jumpModal" role="dialog" aria-modal="true" aria-label="Jump to page">
+        <div class="jumpTitle">Jump to page</div>
+        <input class="jumpInput" id="jumpInput" type="number" min="1" max="38" placeholder="1–38" />
+        <div class="jumpRow">
+          <button class="jumpBtn" id="jumpGo">Go</button>
+          <button class="jumpBtn ghost" id="jumpCancel">Cancel</button>
+        </div>
+        <div class="jumpTip">Tip: Press Enter to go, Esc to close</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ---- CONFIG ----
+  let TOTAL_SLIDES = 19; // auto-detected at runtime
+  let TOTAL_PAGES = 38;  // = 2 * TOTAL_SLIDES
+  const IMAGES_DIR = "images";
+
+  // ---- PAGE -> SLIDE HALF MAPPING ----
+  // returns {slideIndex:1..19, half:"left"|"right"}
+  function pageToSlide(page){
+    if(page < 1 || page > TOTAL_PAGES) return null;
+    if(page === 1)  return { slideIndex: 1, half: "right" };
+    if(page === TOTAL_PAGES) return { slideIndex: 1, half: "left"  };
+    // pages 2..(TOTAL_PAGES-1) live in slide2..slideN
+    const slideIndex = Math.floor((page + 2) / 2); // 2->2, 3->2, 4->3, ...
+    const half = (page % 2 === 0) ? "left" : "right";
+    return { slideIndex, half };
+  }
+
+  function pageStyle(page){
+    const map = pageToSlide(page);
+    if(!map) return null;
+    const url = `${IMAGES_DIR}/slide${map.slideIndex}.jpeg`;
+    const pos = (map.half === "left") ? "0% 0%" : "100% 0%";
+    return { url, pos };
+  }
+
+  // ---- PRELOAD (slides are the real assets) ----
+  const slideCache = new Map(); // slideIndex -> Image
+  function slideUrl(slideIndex){
+    return `${IMAGES_DIR}/slide${slideIndex}.jpeg`;
+  }
+
+  function preloadSlide(slideIndex){
+    if(slideIndex < 1 || slideIndex > TOTAL_SLIDES) return;
+    if(slideCache.has(slideIndex)) return;
+    const img = new Image();
+    img.decoding = "async";
+    img.loading = "eager";
+    img.src = slideUrl(slideIndex);
+    slideCache.set(slideIndex, img);
+  }
+
+  function preloadAroundCurrent(){
+    // Preload current + next/prev spread slides
+    const pagesToConsider = [];
+    if(leftPage) pagesToConsider.push(leftPage);
+    if(rightPage) pagesToConsider.push(rightPage);
+    // Look-ahead/look-behind
+    if(rightPage && rightPage + 1 <= TOTAL_PAGES) pagesToConsider.push(rightPage + 1);
+    if(rightPage && rightPage + 2 <= TOTAL_PAGES) pagesToConsider.push(rightPage + 2);
+    if(leftPage && leftPage - 1 >= 1) pagesToConsider.push(leftPage - 1);
+    if(leftPage && leftPage - 2 >= 1) pagesToConsider.push(leftPage - 2);
+
+    const slideSet = new Set();
+    for(const p of pagesToConsider){
+      const m = pageToSlide(p);
+      if(m) slideSet.add(m.slideIndex);
+    }
+    // Add immediate neighbors for smoother paging
+    for(const s of [...slideSet]){
+      slideSet.add(s - 1);
+      slideSet.add(s + 1);
+    }
+    for(const s of slideSet){
+      preloadSlide(s);
+    }
+  }
+
+  // ---- AUTO-DETECT SLIDE COUNT (slide1..slideN) ----
+  async function probeSlideExists(slideIndex){
+    return new Promise((resolve) => {
+      const img = new Image();
+      let done = false;
+      const finish = (ok) => {
+        if(done) return;
+        done = true;
+        // prevent handlers from holding references
+        img.onload = null;
+        img.onerror = null;
+        resolve(ok);
+      };
+      // Some environments can hang on a bad URL; add a soft timeout
+      const to = setTimeout(() => finish(false), 900);
+      img.onload = () => { clearTimeout(to); finish(true); };
+      img.onerror = () => { clearTimeout(to); finish(false); };
+      img.src = slideUrl(slideIndex);
+    });
+  }
+
+  async function detectTotalSlides(){
+    // We assume slide1 always exists.
+    // Strategy:
+    // 1) Exponential search to find an upper bound where slideK does not exist.
+    // 2) Binary search between lastGood and firstBad.
+    const MAX_CAP = 512; // safety cap
+    let lastGood = 1;
+    let k = 2;
+
+    // Exponential phase
+    while(k <= MAX_CAP){
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await probeSlideExists(k);
+      if(ok){
+        lastGood = k;
+        k *= 2;
+      } else {
+        break;
+      }
+    }
+
+    // If we never found a missing slide before cap, clamp
+    if(k > MAX_CAP){
+      return lastGood;
+    }
+
+    let low = lastGood;
+    let high = k; // high is missing or cap
+
+    // Binary search for last existing
+    while(high - low > 1){
+      const mid = Math.floor((low + high) / 2);
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await probeSlideExists(mid);
+      if(ok) low = mid;
+      else high = mid;
+    }
+
+    return low;
+  }
+
+  function applyDetectedTotals(nSlides){
+    TOTAL_SLIDES = Math.max(1, nSlides | 0);
+    TOTAL_PAGES = TOTAL_SLIDES * 2;
+
+    // Update Jump UI limits dynamically
+    if(jumpInput){
+      jumpInput.max = String(TOTAL_PAGES);
+      jumpInput.placeholder = `1–${TOTAL_PAGES}`;
+    }
+
+    // Update HUD initial text
+    setIndicatorText();
+  }
+
+  // ---- AUDIO (sine-tone sequences, no external files) ----
+  let audioCtx = null;
+  function ensureAudio(){
+    if(audioCtx) return audioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!Ctx) return null;
+    audioCtx = new Ctx();
+    return audioCtx;
+  }
+
+  function playSineSequence(isForward){
+    const ctx = ensureAudio();
+    if(!ctx) return;
+    if(ctx.state === "suspended") ctx.resume().catch(()=>{});
+
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(0.22, now + 0.01);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+    master.connect(ctx.destination);
+
+    const freqs = isForward ? [620, 460, 520] : [520, 410, 470];
+    let t = now;
+    for(let i=0;i<freqs.length;i++){
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      o.frequency.setValueAtTime(freqs[i], t);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(1.0, t + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+      o.connect(g);
+      g.connect(master);
+      o.start(t);
+      o.stop(t + 0.08);
+      t += 0.06;
+    }
+  }
+
+  function setIndicatorText(){
+    // Show current spread like "2–3 / 38" or "1 / 38"
+    if(!pageIndicator) return;
+    if(leftPage && rightPage){
+      pageIndicator.textContent = `Pages ${leftPage}–${rightPage} / ${TOTAL_PAGES}`;
+    } else if(rightPage){
+      pageIndicator.textContent = `Page ${rightPage} / ${TOTAL_PAGES}`;
+    } else if(leftPage){
+      pageIndicator.textContent = `Page ${leftPage} / ${TOTAL_PAGES}`;
+    } else {
+      pageIndicator.textContent = `Page 1 / ${TOTAL_PAGES}`;
+    }
+  }
+
+  // ---- RESISTANCE / SOFTENING ----
+  function smootherstep(x){
+    // 0..1 with resistance near ends
+    x = Math.max(0, Math.min(1, x));
+    return x * x * x * (x * (x * 6 - 15) + 10);
+  }
+
+  // ---- DOM HELPERS ----
+  const book = document.getElementById("book");
+  const spine = document.getElementById("spine");
+  const leftSlot  = document.getElementById("leftSlot");
+  const rightSlot = document.getElementById("rightSlot");
+
+  // HUD / Jump UI
+  const pageIndicator = document.getElementById("pageIndicator");
+  const jumpOverlay = document.getElementById("jumpOverlay");
+  const jumpInput = document.getElementById("jumpInput");
+  const jumpGo = document.getElementById("jumpGo");
+  const jumpCancel = document.getElementById("jumpCancel");
+
+  // Shadow handoff bridge element (created on demand)
+  let handoffEl = null;
+  function ensureHandoff(direction){
+    if(handoffEl){
+      handoffEl.remove();
+      handoffEl = null;
+    }
+    handoffEl = document.createElement("div");
+    handoffEl.className = `handoff ${direction}`;
+    book.appendChild(handoffEl);
+    return handoffEl;
+  }
+
+  function removeHandoffSoon(){
+    if(!handoffEl) return;
+    const el = handoffEl;
+    handoffEl = null;
+    el.style.opacity = "0";
+    setTimeout(() => { try { el.remove(); } catch(e){} }, 180);
+  }
+
+  function clearSlot(slot){
+    slot.innerHTML = "";
+  }
+
+  function makeEmpty(){
+    const e = document.createElement("div");
+    e.className = "empty";
+    return e;
+  }
+
+  function makeStaticPage(pageNumber){
+    const p = document.createElement("div");
+    p.className = "page";
+
+    const face = document.createElement("div");
+    face.className = "pageFace";
+    const tint = document.createElement("div");
+    tint.className = "pageTint";
+
+    const st = pageStyle(pageNumber);
+    if(st){
+      face.style.backgroundImage = `url("${st.url}")`;
+      face.style.backgroundPosition = st.pos;
+    } else {
+      face.style.backgroundImage = "none";
+    }
+
+    p.appendChild(face);
+    p.appendChild(tint);
+    return p;
+  }
+
+  function makeLeaf(direction, frontPage, backPage){
+    // direction: "forward" (right->left) or "backward" (left->right)
+    const leaf = document.createElement("div");
+    leaf.className = "leaf";
+    leaf.dataset.direction = direction;
+
+    // leaf sits on right half for forward, left half for backward
+    if(direction === "forward"){
+      leaf.style.left = "50%";
+      leaf.style.transformOrigin = "0% 50%"; // spine
+    } else {
+      leaf.style.left = "0%";
+      leaf.style.transformOrigin = "100% 50%"; // spine
+    }
+
+    const front = document.createElement("div");
+    front.className = "leafFace leafFront";
+    front.appendChild(makeStaticPage(frontPage).firstChild); // pageFace only
+    // add tint similar to static
+    const tintF = document.createElement("div");
+    tintF.className = "pageTint";
+    front.appendChild(tintF);
+
+    const back = document.createElement("div");
+    back.className = "leafFace leafBack";
+    back.appendChild(makeStaticPage(backPage).firstChild);
+    const tintB = document.createElement("div");
+    tintB.className = "pageTint";
+    back.appendChild(tintB);
+
+    const shade = document.createElement("div");
+    shade.className = `shade ${direction === "forward" ? "forward" : "backward"}`;
+
+    leaf.appendChild(front);
+    leaf.appendChild(back);
+    leaf.appendChild(shade);
+    return leaf;
+  }
+
+  // ---- BOOK STATE ----
+  // visible spread:
+  // leftPage is even (2..38) or null
+  // rightPage is odd (1..37) or null
+  let leftPage = null; // start: empty
+  let rightPage = 1;
+
+  // gesture state
+  let isDragging = false;
+  let dragDir = null; // "forward" or "backward"
+  let startX = 0;
+  let currentProgress = 0; // 0..1
+  let leafEl = null;
+
+  // velocity tracking (for commit decisions)
+  let lastMoveT = 0;
+  let lastRawP = 0;
+  let lastVel = 0; // progress per ms, positive means moving toward flip
+
+  // keep an explicit raw progress (before resistance easing)
+  let rawProgress = 0;
+
+  // ---- RENDER ----
+  function renderSpread(){
+    clearSlot(leftSlot);
+    clearSlot(rightSlot);
+
+    if(leftPage){
+      leftSlot.appendChild(makeStaticPage(leftPage));
+    } else {
+      leftSlot.appendChild(makeEmpty());
+    }
+
+    if(rightPage){
+      rightSlot.appendChild(makeStaticPage(rightPage));
+    } else {
+      rightSlot.appendChild(makeEmpty());
+    }
+
+    setIndicatorText();
+    // preload soon after each render
+    if("requestIdleCallback" in window){
+      requestIdleCallback(preloadAroundCurrent, {timeout: 150});
+    } else {
+      setTimeout(preloadAroundCurrent, 0);
+    }
+  }
+
+  function canFlipForward(){
+    // forward flip uses rightPage
+    return rightPage !== null && rightPage < TOTAL_PAGES;
+  }
+
+  function canFlipBackward(){
+    // backward flip uses leftPage
+    return leftPage !== null;
+  }
+
+  function beginFlip(direction){
+    // reset ambient shadow for a fresh gesture
+    if(spine) spine.style.opacity = "0.35";
+
+    // create a bridge overlay that fades in near the end of the flip
+    ensureHandoff(direction);
+
+    if(direction === "forward"){
+      // flip rightPage (odd) -> backside is rightPage+1 (even)
+      // behind should show rightPage+2 on right, and left side becomes (optionally) previous stack; we’ll set spread underlay now:
+      // Underlay during flip:
+      // left shows current leftPage (if any) else empty
+      // right shows nextRight = rightPage+2 (or empty if none)
+      const nextLeft = rightPage + 1;         // backside
+      const nextRight = (rightPage + 2 <= TOTAL_PAGES) ? (rightPage + 2) : null;
+
+      // Set underlay pages (what you see behind the turning page)
+      // Left underlay: keep current leftPage until flip completes (visually acceptable and stable)
+      // Right underlay: nextRight (page3 when flipping page1)
+      clearSlot(leftSlot);
+      clearSlot(rightSlot);
+      leftSlot.appendChild(leftPage ? makeStaticPage(leftPage) : makeEmpty());
+      rightSlot.appendChild(nextRight ? makeStaticPage(nextRight) : makeEmpty());
+
+      // Create leaf (front=rightPage, back=nextLeft)
+      leafEl = makeLeaf("forward", rightPage, nextLeft);
+      book.appendChild(leafEl);
+
+    } else {
+      // backward flip uses leftPage (even) -> backside is leftPage-1 (odd)
+      // behind should show prevLeft = leftPage-2 on left (or empty) and current rightPage on right (or empty)
+      const prevRight = leftPage - 1;                 // backside
+      const prevLeft = (leftPage - 2 >= 1) ? (leftPage - 2) : null;
+
+      clearSlot(leftSlot);
+      clearSlot(rightSlot);
+      leftSlot.appendChild(prevLeft ? makeStaticPage(prevLeft) : makeEmpty());
+      rightSlot.appendChild(rightPage ? makeStaticPage(rightPage) : makeEmpty());
+
+      leafEl = makeLeaf("backward", leftPage, prevRight);
+      book.appendChild(leafEl);
+    }
+  }
+
+  function setFlipProgress(p){
+    rawProgress = Math.max(0, Math.min(1, p));
+    currentProgress = smootherstep(rawProgress);
+    if(!leafEl) return;
+
+    // rotation: forward goes 0 -> -180, backward goes 0 -> +180
+    const dir = leafEl.dataset.direction;
+    const deg = (dir === "forward") ? (-180 * currentProgress) : (180 * currentProgress);
+    leafEl.style.transform = `rotateY(${deg}deg)`;
+
+    // shade opacity increases mid-flip
+    const shade = leafEl.querySelector(".shade");
+    if(shade){
+      const mid = 1 - Math.abs(0.5 - currentProgress) * 2; // 0 at ends, 1 at mid
+
+      // Base leaf shade
+      const baseShade = 0.55 * mid;
+
+      // Shadow handoff timing: last 25% of raw drag distance
+      const t = Math.max(0, Math.min(1, (rawProgress - 0.75) / 0.25)); // 0 at 0.75, 1 at 1.0
+      const fadeIn = t * t * (3 - 2 * t); // smoothstep
+
+      // Soften leaf shade slightly near completion to prevent lighting swap jump
+      const endFactor = 1 - 0.35 * fadeIn;
+      shade.style.opacity = (baseShade * endFactor).toFixed(3);
+
+      // Bridge overlay fades in near the end to match final static lighting
+      if(handoffEl){
+        handoffEl.style.opacity = (0.38 * fadeIn).toFixed(3);
+      }
+
+      // soft ambient spine shadow shift
+      if(spine){
+        const base = 0.35;
+        const extra = 0.22 * mid;
+        spine.style.opacity = (base + extra).toFixed(3);
+      }
+    }
+  }
+
+  function endFlip(commit){
+    if(!leafEl) return;
+
+    // animate to end or back
+    const from = currentProgress;
+    const to = commit ? 1 : 0;
+    const start = performance.now();
+    const dur = 240;
+
+    function anim(t){
+      const k = Math.min(1, (t - start) / dur);
+      // easeInOut
+      const e = k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2)/2;
+      const p = from + (to - from) * e;
+      setFlipProgress(p);
+      if(k < 1) requestAnimationFrame(anim);
+      else finalize();
+    }
+
+    function finalize(){
+      const dir = leafEl.dataset.direction;
+      leafEl.remove();
+      leafEl = null;
+
+      // ease spine back and remove bridge overlay smoothly
+      if(spine){
+        spine.style.transition = "opacity 160ms ease-out";
+        spine.style.opacity = "0.35";
+        setTimeout(() => { if(spine) spine.style.transition = ""; }, 180);
+      }
+      removeHandoffSoon();
+
+      if(commit){
+        // micro haptic on supported devices
+        if(navigator.vibrate) navigator.vibrate(8);
+        // sine-tone flip sound
+        playSineSequence(dir === "forward");
+      }
+
+      if(commit){
+        if(dir === "forward"){
+          // After forward flip of rightPage:
+          // end spread: left = rightPage+1, right = rightPage+2 (or null)
+          const newLeft = rightPage + 1;
+          const newRight = (rightPage + 2 <= TOTAL_PAGES) ? (rightPage + 2) : null;
+          leftPage = newLeft;
+          rightPage = newRight;
+        } else {
+          // After backward flip of leftPage:
+          // end spread: right = leftPage-1, left = leftPage-2 (or null)
+          const newRight = leftPage - 1;
+          const newLeft = (leftPage - 2 >= 1) ? (leftPage - 2) : null;
+
+          // Special: when we reach the very beginning, show only page 1 on right
+          leftPage = newLeft;
+          rightPage = newRight;
+
+          if(rightPage === 1){
+            leftPage = null;
+          }
+        }
+      }
+
+      renderSpread();
+    }
+
+    requestAnimationFrame(anim);
+  }
+
+  // ---- INPUT HANDLING ----
+  function getLocalX(clientX){
+    const r = book.getBoundingClientRect();
+    return clientX - r.left;
+  }
+
+  function pointerDown(e){
+    // Only primary pointer
+    if(e.pointerType === "mouse" && e.button !== 0) return;
+
+    const r = book.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const isRightHalf = x > r.width/2;
+    const isLeftHalf  = !isRightHalf;
+
+    // Decide direction based on where user starts
+    // If they start on right half and we can flip forward, begin forward
+    // If they start on left half and we can flip backward, begin backward
+    if(isRightHalf && canFlipForward()){
+      dragDir = "forward";
+    } else if(isLeftHalf && canFlipBackward()){
+      dragDir = "backward";
+    } else {
+      dragDir = null;
+      return;
+    }
+
+    isDragging = true;
+    startX = x;
+    currentProgress = 0;
+
+    rawProgress = 0;
+    lastRawP = 0;
+    lastVel = 0;
+    lastMoveT = performance.now();
+
+    beginFlip(dragDir);
+    setFlipProgress(0);
+
+    book.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function pointerMove(e){
+    if(!isDragging || !dragDir || !leafEl) return;
+
+    const r = book.getBoundingClientRect();
+    const x = e.clientX - r.left;
+
+    // progress is how far user drags across half-width
+    // forward: drag from right towards left increases progress
+    // backward: drag from left towards right increases progress
+    const half = r.width / 2;
+    let delta;
+
+    if(dragDir === "forward"){
+      // start on right half; moving left increases
+      delta = (startX - x);
+    } else {
+      delta = (x - startX);
+    }
+
+    const p = delta / half;
+
+    // velocity estimate in progress/ms
+    const now = performance.now();
+    const dt = Math.max(1, now - lastMoveT);
+    const newRaw = Math.max(0, Math.min(1, p));
+    lastVel = (newRaw - lastRawP) / dt;
+    lastRawP = newRaw;
+    lastMoveT = now;
+
+    setFlipProgress(p);
+
+    e.preventDefault();
+  }
+
+  function pointerUp(e){
+    if(!isDragging) return;
+    isDragging = false;
+
+    if(!leafEl){
+      dragDir = null;
+      return;
+    }
+
+    // Commit based on distance OR flick velocity
+    // lastVel is progress/ms (positive means moving toward completing the flip)
+    const distanceCommit = rawProgress > 0.5;
+    const flickCommit = lastVel > 0.0025 && rawProgress > 0.18;
+    const flickCancel = lastVel < -0.0025 && rawProgress < 0.82;
+
+    const commit = flickCancel ? false : (distanceCommit || flickCommit);
+    endFlip(commit);
+
+    dragDir = null;
+    e.preventDefault();
+  }
+
+  // ---- PROGRAMMATIC NAVIGATION ----
+  function isAnimating(){
+    return !!leafEl;
+  }
+
+  function goForward(){
+    if(isAnimating()) return;
+    if(!canFlipForward()) return;
+    dragDir = "forward";
+    beginFlip("forward");
+    setFlipProgress(0);
+    // force commit animation
+    rawProgress = 0;
+    currentProgress = 0;
+    endFlip(true);
+  }
+
+  function goBackward(){
+    if(isAnimating()) return;
+    if(!canFlipBackward()) return;
+    dragDir = "backward";
+    beginFlip("backward");
+    setFlipProgress(0);
+    rawProgress = 0;
+    currentProgress = 0;
+    endFlip(true);
+  }
+
+  function jumpToPage(n){
+    const page = Math.max(1, Math.min(TOTAL_PAGES, Math.floor(n || 1)));
+    if(page === 1){
+      leftPage = null;
+      rightPage = 1;
+    } else if(page === TOTAL_PAGES){
+      leftPage = TOTAL_PAGES;
+      rightPage = null;
+    } else if(page % 2 === 0){
+      leftPage = page;
+      rightPage = page + 1;
+    } else {
+      leftPage = page - 1;
+      rightPage = page;
+    }
+    renderSpread();
+  }
+
+  function openJump(){
+    if(!jumpOverlay) return;
+    jumpOverlay.classList.add("open");
+    jumpOverlay.setAttribute("aria-hidden", "false");
+    if(jumpInput){
+      jumpInput.value = "";
+      setTimeout(() => jumpInput.focus(), 0);
+    }
+  }
+
+  function closeJump(){
+    if(!jumpOverlay) return;
+    jumpOverlay.classList.remove("open");
+    jumpOverlay.setAttribute("aria-hidden", "true");
+    if(book) book.focus?.();
+  }
+
+  function confirmJump(){
+    if(!jumpInput) return;
+    const val = parseInt(jumpInput.value, 10);
+    if(!Number.isFinite(val)) return;
+    jumpToPage(val);
+    closeJump();
+  }
+
+  // Jump overlay interactions
+  if(jumpGo) jumpGo.addEventListener("click", confirmJump);
+  if(jumpCancel) jumpCancel.addEventListener("click", closeJump);
+  if(jumpOverlay) jumpOverlay.addEventListener("click", (e) => {
+    if(e.target === jumpOverlay) closeJump();
+  });
+  if(jumpInput) jumpInput.addEventListener("keydown", (e) => {
+    if(e.key === "Enter") confirmJump();
+    if(e.key === "Escape") closeJump();
+  });
+
+  // Keyboard navigation
+  window.addEventListener("keydown", (e) => {
+    // don’t steal keys while jump overlay is open
+    const jumpOpen = jumpOverlay && jumpOverlay.classList.contains("open");
+    if(jumpOpen){
+      if(e.key === "Escape") closeJump();
+      return;
+    }
+
+    if(e.key === "ArrowRight" || e.key === " "){
+      e.preventDefault();
+      goForward();
+    }
+
+    if(e.key === "ArrowLeft"){
+      e.preventDefault();
+      goBackward();
+    }
+
+    if(e.key === "g" || e.key === "G"){
+      e.preventDefault();
+      openJump();
+    }
+  }, {passive:false});
+
+  // ---- INIT ----
+  (async () => {
+    // Detect slides first so TOTAL_PAGES mapping is correct
+    const n = await detectTotalSlides();
+    applyDetectedTotals(n);
+
+    // Ensure we start at page 1 (right) after totals are known
+    leftPage = null;
+    rightPage = 1;
+
+    renderSpread();
+    preloadAroundCurrent();
+  })();
+
+  book.addEventListener("pointerdown", pointerDown, {passive:false});
+  book.addEventListener("pointermove", pointerMove, {passive:false});
+  book.addEventListener("pointerup", pointerUp, {passive:false});
+  book.addEventListener("pointercancel", pointerUp, {passive:false});
+})();
+</script>
+</body>
+</html>
