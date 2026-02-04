@@ -1290,17 +1290,39 @@
     hardResetView("document-dblclick");
   }, {passive:false, capture:true});
 
-  // Desktop ctrl/cmd + wheel zoom
+  // Desktop/trackpad: Ctrl/Cmd + wheel zooms, normal wheel pans when zoomed
   if(bookViewport){
     bookViewport.addEventListener("wheel", (e) => {
-      // Ctrl/Cmd + wheel is the most common trackpad pinch signal on desktop browsers
       const isZoomGesture = e.ctrlKey || e.metaKey;
-      if(!isZoomGesture) return;
-      e.preventDefault();
 
-      const factor = Math.exp(-e.deltaY * 0.0016);
-      const next = clamp(zoomScale * factor, ZOOM_MIN, ZOOM_MAX);
-      zoomAt(next, e.clientX, e.clientY);
+      if(isZoomGesture){
+        // Zoom around cursor
+        e.preventDefault();
+        const factor = Math.exp(-e.deltaY * 0.0016);
+        const next = clamp(zoomScale * factor, ZOOM_MIN, ZOOM_MAX);
+        zoomAt(next, e.clientX, e.clientY);
+        return;
+      }
+
+      // When zoomed in, use wheel/trackpad scroll to pan
+      if(zoomScale > 1.001){
+        e.preventDefault();
+
+        // Trackpads often provide deltaX for horizontal panning.
+        // Mouse wheels usually provide deltaY. Support both.
+        let dx = e.deltaX;
+        let dy = e.deltaY;
+
+        // Shift+wheel convention for horizontal pan on some mice
+        if(e.shiftKey && Math.abs(dx) < Math.abs(dy)){
+          dx = dy;
+          dy = 0;
+        }
+
+        panX -= dx;
+        panY -= dy;
+        applyViewTransform();
+      }
     }, {passive:false});
   }
 
