@@ -12,6 +12,7 @@
       --paper: #f4f1ea;
       --bg: #111;
       --spread-ar: 2970 / 2056; /* full slide aspect ratio */
+      --ui-reserve: 140px; /* space for stage padding + HUD + safe areas */
     }
 
     html, body {
@@ -33,7 +34,9 @@
 
     /* Outer book frame */
     .book{
-      width: min(92vw, 1200px);
+      /* Fit by BOTH width and height: width <= availableHeight * aspectRatio */
+      width: min(92vw, 1200px, calc((100vh - var(--ui-reserve) - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * (var(--spread-ar))));
+      max-height: calc(100vh - var(--ui-reserve) - env(safe-area-inset-top) - env(safe-area-inset-bottom));
       aspect-ratio: var(--spread-ar); /* match 2970x2056 to avoid stretch */
       position: relative;
       perspective: 1600px;
@@ -188,7 +191,7 @@
     .hud{
       position: fixed;
       left: 50%;
-      bottom: 18px;
+      bottom: calc(18px + env(safe-area-inset-bottom));
       transform: translateX(-50%);
       display: flex;
       gap: 10px;
@@ -305,14 +308,14 @@
     </div>
 
     <div class="hud" id="hud">
-      <div class="hudPill" id="pageIndicator">Page 1 / 38</div>
+      <div class="hudPill" id="pageIndicator">Page 1 / 50</div>
       <div class="hudHint" id="hudHint">← / →, Space, G to jump</div>
     </div>
 
     <div class="jumpOverlay" id="jumpOverlay" aria-hidden="true">
       <div class="jumpModal" role="dialog" aria-modal="true" aria-label="Jump to page">
         <div class="jumpTitle">Jump to page</div>
-        <input class="jumpInput" id="jumpInput" type="number" min="1" max="38" placeholder="1–38" />
+        <input class="jumpInput" id="jumpInput" type="number" min="1" max="50" placeholder="1–50" />
         <div class="jumpRow">
           <button class="jumpBtn" id="jumpGo">Go</button>
           <button class="jumpBtn ghost" id="jumpCancel">Cancel</button>
@@ -325,8 +328,8 @@
 <script>
 (() => {
   // ---- CONFIG ----
-  let TOTAL_SLIDES = 25; // auto-detected at runtime
-  let TOTAL_PAGES = 50;  // = 2 * TOTAL_SLIDES
+  const TOTAL_SLIDES = 25;
+  const TOTAL_PAGES = 50;  // = 2 * TOTAL_SLIDES
   const IMAGES_DIR = "images";
 
   // ---- PAGE -> SLIDE HALF MAPPING ----
@@ -392,80 +395,7 @@
   }
 
   // ---- AUTO-DETECT SLIDE COUNT (slide1..slideN) ----
-  async function probeSlideExists(slideIndex){
-    return new Promise((resolve) => {
-      const img = new Image();
-      let done = false;
-      const finish = (ok) => {
-        if(done) return;
-        done = true;
-        // prevent handlers from holding references
-        img.onload = null;
-        img.onerror = null;
-        resolve(ok);
-      };
-      // Some environments can hang on a bad URL; add a soft timeout
-      const to = setTimeout(() => finish(false), 900);
-      img.onload = () => { clearTimeout(to); finish(true); };
-      img.onerror = () => { clearTimeout(to); finish(false); };
-      img.src = slideUrl(slideIndex);
-    });
-  }
-
-  async function detectTotalSlides(){
-    // We assume slide1 always exists.
-    // Strategy:
-    // 1) Exponential search to find an upper bound where slideK does not exist.
-    // 2) Binary search between lastGood and firstBad.
-    const MAX_CAP = 512; // safety cap
-    let lastGood = 1;
-    let k = 2;
-
-    // Exponential phase
-    while(k <= MAX_CAP){
-      // eslint-disable-next-line no-await-in-loop
-      const ok = await probeSlideExists(k);
-      if(ok){
-        lastGood = k;
-        k *= 2;
-      } else {
-        break;
-      }
-    }
-
-    // If we never found a missing slide before cap, clamp
-    if(k > MAX_CAP){
-      return lastGood;
-    }
-
-    let low = lastGood;
-    let high = k; // high is missing or cap
-
-    // Binary search for last existing
-    while(high - low > 1){
-      const mid = Math.floor((low + high) / 2);
-      // eslint-disable-next-line no-await-in-loop
-      const ok = await probeSlideExists(mid);
-      if(ok) low = mid;
-      else high = mid;
-    }
-
-    return low;
-  }
-
-  function applyDetectedTotals(nSlides){
-    TOTAL_SLIDES = Math.max(1, nSlides | 0);
-    TOTAL_PAGES = TOTAL_SLIDES * 2;
-
-    // Update Jump UI limits dynamically
-    if(jumpInput){
-      jumpInput.max = String(TOTAL_PAGES);
-      jumpInput.placeholder = `1–${TOTAL_PAGES}`;
-    }
-
-    // Update HUD initial text
-    setIndicatorText();
-  }
+  // [auto-detection logic removed for fixed slide count]
 
   // ---- AUDIO (sine-tone sequences, no external files) ----
   let audioCtx = null;
@@ -1051,18 +981,18 @@
   }, {passive:false});
 
   // ---- INIT ----
-  (async () => {
-    // Detect slides first so TOTAL_PAGES mapping is correct
-    const n = await detectTotalSlides();
-    applyDetectedTotals(n);
+  // Ensure we start at page 1 (right)
+  leftPage = null;
+  rightPage = 1;
 
-    // Ensure we start at page 1 (right) after totals are known
-    leftPage = null;
-    rightPage = 1;
+  // Set Jump UI limits for a fixed 25-slide (50-page) book
+  if(jumpInput){
+    jumpInput.max = String(TOTAL_PAGES);
+    jumpInput.placeholder = `1–${TOTAL_PAGES}`;
+  }
 
-    renderSpread();
-    preloadAroundCurrent();
-  })();
+  renderSpread();
+  preloadAroundCurrent();
 
   book.addEventListener("pointerdown", pointerDown, {passive:false});
   book.addEventListener("pointermove", pointerMove, {passive:false});
