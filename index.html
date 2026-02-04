@@ -13,6 +13,7 @@
       --bg: #111;
       --spread-ar: 2970 / 2056; /* full slide aspect ratio */
       --ui-reserve: 140px; /* space for stage padding + HUD + safe areas */
+      --bleed: 1.02; /* 2% overscan to hide subpixel seams */
     }
 
     html, body {
@@ -92,7 +93,7 @@
       position:absolute; inset:0;
       border-radius: var(--page-radius);
       background-repeat: no-repeat;
-      background-size: 200% 100%;   /* double spread */
+      background-size: calc(200% * var(--bleed)) calc(100% * var(--bleed));   /* double spread + overscan */
       background-position: 0% 0%;
       background-color: var(--paper);
       filter: saturate(1.02) contrast(1.02);
@@ -371,7 +372,7 @@
     const map = pageToSlide(page);
     if(!map) return null;
     const url = `${IMAGES_DIR}/Slide${map.slideIndex}.jpeg`;
-    const pos = (map.half === "left") ? "0% 0%" : "100% 0%";
+    const pos = (map.half === "left") ? "0% 50%" : "100% 50%";
     return { url, pos };
   }
 
@@ -1006,7 +1007,8 @@
 
     // Touch UX: require starting near the outer edges to begin a flip.
     // This avoids hijacking pinch gestures (first finger down) as a page flip.
-    const edge = Math.min(140, r.width * 0.2);
+    // Wider edge zone for touch so flipping is easier on phones
+    const edge = Math.min(140, r.width * 0.18);
     const nearRightEdge = x >= (r.width - edge);
     const nearLeftEdge  = x <= edge;
 
