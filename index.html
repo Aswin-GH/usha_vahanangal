@@ -942,8 +942,12 @@
       return;
     }
 
-    // If a flip is currently active, ignore new starts
-    if(leafEl || isDragging){
+    // Track pointers for pinch
+    activePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
+
+    // If a flip is currently active, ignore NEW single-pointer starts,
+    // but still allow a second pointer to initiate pinch.
+    if((leafEl || isDragging) && activePointers.size < 2){
       if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
       e.preventDefault();
       e.stopPropagation();
@@ -966,15 +970,12 @@
       return;
     }
 
-    // Track pointers for pinch
-    activePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-
     // If a second pointer goes down, enter pinch mode and cancel any flip
     if(activePointers.size === 2){
       isPinching = true;
-      // cancel in-progress flip cleanly
-      if(leafEl){
-        endFlip(false);
+      // Cancel any in-progress flip (hard reset avoids leftover transformed layers)
+      if(leafEl || isDragging){
+        hardResetView("pinch-start");
       }
 
       const pts = [...activePointers.values()];
@@ -1002,19 +1003,26 @@
 
     const r = book.getBoundingClientRect();
     const x = e.clientX - r.left;
-    const isRightHalf = x > r.width/2;
+
+    // Touch UX: require starting near the outer edges to begin a flip.
+    // This avoids hijacking pinch gestures (first finger down) as a page flip.
+    const edge = Math.min(80, r.width * 0.12);
+    const nearRightEdge = x >= (r.width - edge);
+    const nearLeftEdge  = x <= edge;
+
+    // Mouse UX can still use half-screen semantics (more forgiving)
+    const isMouse = e.pointerType === "mouse";
+    const isRightHalf = x > r.width / 2;
     const isLeftHalf  = !isRightHalf;
 
-    // Decide direction based on where user starts
-    // If they start on right half and we can flip forward, begin forward
-    // If they start on left half and we can flip backward, begin backward
-    if(isRightHalf && canFlipForward()){
-      dragDir = "forward";
-    } else if(isLeftHalf && canFlipBackward()){
-      dragDir = "backward";
+    if(isMouse){
+      if(isRightHalf && canFlipForward()) dragDir = "forward";
+      else if(isLeftHalf && canFlipBackward()) dragDir = "backward";
+      else { dragDir = null; return; }
     } else {
-      dragDir = null;
-      return;
+      if(nearRightEdge && canFlipForward()) dragDir = "forward";
+      else if(nearLeftEdge && canFlipBackward()) dragDir = "backward";
+      else { dragDir = null; return; }
     }
 
     isDragging = true;
@@ -1111,6 +1119,9 @@
       isPinching = false;
       // reset pinch baselines
       pinchStartDist = 0;
+      pinchStartScale = zoomScale;
+      pinchStartPanX = panX;
+      pinchStartPanY = panY;
       e.preventDefault();
       e.stopPropagation();
       return;
