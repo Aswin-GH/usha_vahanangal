@@ -1006,7 +1006,7 @@
 
     // Touch UX: require starting near the outer edges to begin a flip.
     // This avoids hijacking pinch gestures (first finger down) as a page flip.
-    const edge = Math.min(80, r.width * 0.12);
+    const edge = Math.min(140, r.width * 0.2);
     const nearRightEdge = x >= (r.width - edge);
     const nearLeftEdge  = x <= edge;
 
