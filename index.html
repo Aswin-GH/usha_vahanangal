@@ -370,7 +370,7 @@
   function pageStyle(page){
     const map = pageToSlide(page);
     if(!map) return null;
-    const url = `${IMAGES_DIR}/slide${map.slideIndex}.jpeg`;
+    const url = `${IMAGES_DIR}/Slide${map.slideIndex}.jpeg`;
     const pos = (map.half === "left") ? "0% 0%" : "100% 0%";
     return { url, pos };
   }
@@ -378,7 +378,7 @@
   // ---- PRELOAD (slides are the real assets) ----
   const slideCache = new Map(); // slideIndex -> Image
   function slideUrl(slideIndex){
-    return `${IMAGES_DIR}/slide${slideIndex}.jpeg`;
+    return `${IMAGES_DIR}/Slide${slideIndex}.jpeg`;
   }
 
   function preloadSlide(slideIndex){
