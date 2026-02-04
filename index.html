@@ -370,7 +370,7 @@
   function pageStyle(page){
     const map = pageToSlide(page);
     if(!map) return null;
-    const url = `${IMAGES_DIR}/Slide${map.slideIndex}.jpeg`;
+    const url = `${IMAGES_DIR}/slide${map.slideIndex}.jpeg`;
     const pos = (map.half === "left") ? "0% 0%" : "100% 0%";
     return { url, pos };
   }
@@ -378,7 +378,7 @@
   // ---- PRELOAD (slides are the real assets) ----
   const slideCache = new Map(); // slideIndex -> Image
   function slideUrl(slideIndex){
-    return `${IMAGES_DIR}/Slide${slideIndex}.jpeg`;
+    return `${IMAGES_DIR}/slide${slideIndex}.jpeg`;
   }
 
   function preloadSlide(slideIndex){
@@ -601,6 +601,15 @@
   let currentProgress = 0; // 0..1
   let leafEl = null;
 
+  // double-tap / rapid-tap suppression (prevents iOS smart-zoom snapshot glitches)
+  let lastTapTime = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
+  let suppressUntil = 0;
+
+  // general rapid-input suppression (mouse dblclick / touch double-tap)
+  let interactionLockUntil = 0;
+
   // velocity tracking (for commit decisions)
   let lastMoveT = 0;
   let lastRawP = 0;
@@ -646,6 +655,35 @@
   function applyViewTransform(){
     clampPan();
     book.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+  }
+
+  function hardResetView(reason){
+    // Remove any transient flip artifacts and restore a clean static spread
+    try{
+      if(leafEl){
+        leafEl.remove();
+        leafEl = null;
+      }
+    } catch(e){}
+
+    try{
+      if(handoffEl){
+        handoffEl.remove();
+        handoffEl = null;
+      }
+    } catch(e){}
+
+    isDragging = false;
+    dragDir = null;
+    currentProgress = 0;
+    rawProgress = 0;
+
+    if(spine){
+      spine.style.transition = "";
+      spine.style.opacity = "0.35";
+    }
+
+    renderSpread();
   }
 
   function zoomAt(newScale, clientX, clientY){
@@ -863,9 +901,70 @@
     return clientX - r.left;
   }
 
+  function shouldSuppressTap(e){
+    // Only suppress touch taps (mouse double-click handled separately)
+    if(e.pointerType !== "touch") return false;
+    const now = performance.now();
+
+    // If we are within an active suppression window, ignore
+    if(now < suppressUntil) return true;
+
+    // Detect double-tap: quick succession + small movement
+    const dt = now - lastTapTime;
+    const dx = e.clientX - lastTapX;
+    const dy = e.clientY - lastTapY;
+    const dist = Math.hypot(dx, dy);
+
+    if(dt > 0 && dt < 280 && dist < 26){
+      // suppress for a short window to avoid browser smart zoom / snapshot artifacts
+      suppressUntil = now + 420;
+      interactionLockUntil = now + 520;
+      return true;
+    }
+
+    // record this tap as a candidate for the next one
+    lastTapTime = now;
+    lastTapX = e.clientX;
+    lastTapY = e.clientY;
+    return false;
+  }
+
   function pointerDown(e){
     // Only primary pointer
     if(e.pointerType === "mouse" && e.button !== 0) return;
+
+    // Global cooldown (prevents dblclick/smart-zoom causing frozen snapshots)
+    const now = performance.now();
+    if(now < interactionLockUntil){
+      if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // If a flip is currently active, ignore new starts
+    if(leafEl || isDragging){
+      if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // Mouse double-click: ignore second click (e.detail >= 2)
+    if(e.pointerType === "mouse" && e.detail >= 2){
+      interactionLockUntil = now + 450;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
+    // Suppress rapid double-taps that can trigger browser smart-zoom / image snapshot glitches
+    if(shouldSuppressTap(e)){
+      if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
 
     // Track pointers for pinch
     activePointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
@@ -889,6 +988,7 @@
 
       if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -896,6 +996,7 @@
     if(isPinching){
       if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -928,8 +1029,9 @@
     beginFlip(dragDir);
     setFlipProgress(0);
 
-    book.setPointerCapture(e.pointerId);
+    if(bookViewport) bookViewport.setPointerCapture(e.pointerId);
     e.preventDefault();
+    e.stopPropagation();
   }
 
   function pointerMove(e){
@@ -950,8 +1052,19 @@
       panX = pinchStartPanX + (center.x - pinchStartCenter.x);
       panY = pinchStartPanY + (center.y - pinchStartCenter.y);
 
-      zoomAt(scale, center.x, center.y);
+      // update baselines to allow smooth continuous 2-finger panning
+      pinchStartPanX = panX;
+      pinchStartPanY = panY;
+      pinchStartCenter = center;
+      pinchStartScale = zoomScale;
+      pinchStartDist = dist;
+
+      // Apply pinch scale + two-finger pan together
+      zoomScale = scale;
+      applyViewTransform();
+
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -986,6 +1099,7 @@
     setFlipProgress(p);
 
     e.preventDefault();
+    e.stopPropagation();
   }
 
   function pointerUp(e){
@@ -998,6 +1112,7 @@
       // reset pinch baselines
       pinchStartDist = 0;
       e.preventDefault();
+      e.stopPropagation();
       return;
     }
 
@@ -1020,6 +1135,7 @@
 
     dragDir = null;
     e.preventDefault();
+    e.stopPropagation();
   }
 
   // ---- PROGRAMMATIC NAVIGATION ----
@@ -1143,21 +1259,36 @@
   renderSpread();
   preloadAroundCurrent();
 
-  book.addEventListener("pointerdown", pointerDown, {passive:false});
-  book.addEventListener("pointermove", pointerMove, {passive:false});
-  book.addEventListener("pointerup", pointerUp, {passive:false});
-  book.addEventListener("pointercancel", pointerUp, {passive:false});
-
-  // Prevent double-tap/double-click default behavior
-  book.addEventListener("dblclick", (e) => { e.preventDefault(); }, {passive:false});
-
-  // Also attach pointer listeners to bookViewport for pinch/zoom
+  // Attach ALL gesture handlers only on the viewport (avoids duplicate bubbling handlers)
   if(bookViewport){
     bookViewport.addEventListener("pointerdown", pointerDown, {passive:false});
     bookViewport.addEventListener("pointermove", pointerMove, {passive:false});
     bookViewport.addEventListener("pointerup", pointerUp, {passive:false});
     bookViewport.addEventListener("pointercancel", pointerUp, {passive:false});
+
+    // Prevent double-tap/double-click default behavior, and hard reset view (capture phase)
+    bookViewport.addEventListener("dblclick", (e) => {
+      const now = performance.now();
+      interactionLockUntil = now + 500;
+      e.preventDefault();
+      e.stopPropagation();
+      hardResetView("dblclick");
+    }, {passive:false, capture:true});
+
+    // iOS Safari: prevent gesture-based smart zoom (can cause frozen snapshot artifacts)
+    bookViewport.addEventListener("gesturestart", (e) => { e.preventDefault(); }, {passive:false});
+    bookViewport.addEventListener("gesturechange", (e) => { e.preventDefault(); }, {passive:false});
+    bookViewport.addEventListener("gestureend", (e) => { e.preventDefault(); }, {passive:false});
   }
+
+  // Backstop: prevent browser from interpreting rapid taps as zoom, and hard reset (capture phase)
+  document.addEventListener("dblclick", (e) => {
+    const now = performance.now();
+    interactionLockUntil = now + 500;
+    e.preventDefault();
+    e.stopPropagation();
+    hardResetView("document-dblclick");
+  }, {passive:false, capture:true});
 
   // Desktop ctrl/cmd + wheel zoom
   if(bookViewport){
