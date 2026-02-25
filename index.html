@@ -370,25 +370,70 @@
   function pageStyle(page){
     const map = pageToSlide(page);
     if(!map) return null;
-    const url = `${IMAGES_DIR}/Slide${map.slideIndex}.jpeg`;
+    const url = resolvedSlideUrl(map.slideIndex);
     const pos = (map.half === "left") ? "0% 0%" : "100% 0%";
     return { url, pos };
   }
 
   // ---- PRELOAD (slides are the real assets) ----
-  const slideCache = new Map(); // slideIndex -> Image
-  function slideUrl(slideIndex){
-    return `${IMAGES_DIR}/Slide${slideIndex}.jpeg`;
+  const slideCache = new Map(); // slideIndex -> {img: Image, url: string}
+  const resolvedUrlCache = new Map(); // slideIndex -> resolved url string
+
+  function candidateSlideUrls(slideIndex){
+    // GitHub Pages is case-sensitive. Also, repos sometimes contain .jpg instead of .jpeg.
+    // Try a short, deterministic fallback list.
+    const n = String(slideIndex);
+    return [
+      `${IMAGES_DIR}/Slide${n}.jpeg`,
+      `${IMAGES_DIR}/slide${n}.jpeg`,
+      `${IMAGES_DIR}/Slide${n}.jpg`,
+      `${IMAGES_DIR}/slide${n}.jpg`,
+      `${IMAGES_DIR}/Slide${n}.JPEG`,
+      `${IMAGES_DIR}/slide${n}.JPEG`,
+      `${IMAGES_DIR}/Slide${n}.JPG`,
+      `${IMAGES_DIR}/slide${n}.JPG`,
+    ];
+  }
+
+  function resolvedSlideUrl(slideIndex){
+    // Use resolved url if we already discovered the correct casing/extension.
+    return resolvedUrlCache.get(slideIndex) || candidateSlideUrls(slideIndex)[0];
   }
 
   function preloadSlide(slideIndex){
     if(slideIndex < 1 || slideIndex > TOTAL_SLIDES) return;
     if(slideCache.has(slideIndex)) return;
+
     const img = new Image();
     img.decoding = "async";
     img.loading = "eager";
-    img.src = slideUrl(slideIndex);
-    slideCache.set(slideIndex, img);
+
+    const urls = candidateSlideUrls(slideIndex);
+    let k = 0;
+
+    const tryNext = () => {
+      if(k >= urls.length){
+        console.warn(`[Flipbook] Slide ${slideIndex} failed to load. Tried:`, urls);
+        return;
+      }
+      const u = urls[k++];
+      img.src = u;
+    };
+
+    img.onload = () => {
+      // Record the successful url so rendering uses the exact same path.
+      resolvedUrlCache.set(slideIndex, img.currentSrc || img.src);
+    };
+
+    img.onerror = () => {
+      // Try next casing/extension candidate
+      tryNext();
+    };
+
+    // Start attempts
+    tryNext();
+
+    slideCache.set(slideIndex, {img, url: img.src});
   }
 
   function preloadAroundCurrent(){
@@ -539,6 +584,7 @@
     if(st){
       face.style.backgroundImage = `url("${st.url}")`;
       face.style.backgroundPosition = st.pos;
+      face.style.backgroundSize = "202% 101%"; // slight overscan to hide 1px borders
     } else {
       face.style.backgroundImage = "none";
     }
@@ -1261,7 +1307,7 @@
   leftPage = null;
   rightPage = 1;
 
-  // Set Jump UI limits for a fixed 25-slide (50-page) book
+  // Set Jump UI limits based on TOTAL_PAGES
   if(jumpInput){
     jumpInput.max = String(TOTAL_PAGES);
     jumpInput.placeholder = `1–${TOTAL_PAGES}`;
