@@ -115,6 +115,52 @@
       display: none;
     }
 
+    .edgeCue{
+      position: fixed;
+      inset: 0;
+      z-index: 180;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 450ms ease;
+    }
+
+    .edgeCue.visible{
+      opacity: 1;
+    }
+
+    .edgeCue.hidden{
+      display: none;
+    }
+
+    .edgeCueSide{
+      position: absolute;
+      top: 50%;
+      width: 48px;
+      height: 96px;
+      transform: translateY(-50%);
+      display: grid;
+      place-items: center;
+      color: rgba(255,255,255,0.82);
+      font-size: 34px;
+      line-height: 1;
+      text-shadow: 0 2px 18px rgba(0,0,0,0.75);
+      opacity: 0.78;
+    }
+
+    .edgeCueSide.left{
+      left: max(10px, env(safe-area-inset-left));
+      background: linear-gradient(90deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
+    }
+
+    .edgeCueSide.right{
+      right: max(10px, env(safe-area-inset-right));
+      background: linear-gradient(270deg, rgba(255,255,255,0.12), rgba(255,255,255,0));
+    }
+
+    @media (min-width: 761px) and (pointer: fine){
+      .edgeCue{ display: none; }
+    }
+
     .slot{
       position: relative;
       overflow: visible;
@@ -385,6 +431,11 @@
       <div class="hudHint" id="hudHint">← / →, Space, G to jump</div>
     </div>
 
+    <div class="edgeCue hidden" id="edgeCue" aria-hidden="true">
+      <div class="edgeCueSide left">‹</div>
+      <div class="edgeCueSide right">›</div>
+    </div>
+
     <div class="jumpOverlay" id="jumpOverlay" aria-hidden="true">
       <div class="jumpModal" role="dialog" aria-modal="true" aria-label="Jump to page">
         <div class="jumpTitle">Jump to page</div>
@@ -401,7 +452,7 @@
 <script>
 (() => {
   // ---- CONFIG ----
-  const TOTAL_PAGES = 50;
+  const TOTAL_PAGES = 52;
   const IMAGES_DIR = "images";
 
   function pageStyle(page){
@@ -570,6 +621,26 @@
     currentPage = rightPage || leftPage || 1;
   }
 
+  function showEdgeCueSoon(){
+    if(!edgeCue || edgeCueDismissed || !isSinglePageMode) return;
+    clearTimeout(edgeCueTimer);
+    edgeCue.classList.remove("hidden");
+    requestAnimationFrame(() => edgeCue.classList.add("visible"));
+    edgeCueTimer = setTimeout(() => {
+      if(!edgeCue || edgeCueDismissed) return;
+      edgeCue.classList.remove("visible");
+      edgeCueTimer = setTimeout(() => edgeCue?.classList.add("hidden"), 500);
+    }, 2200);
+  }
+
+  function dismissEdgeCue(){
+    edgeCueDismissed = true;
+    clearTimeout(edgeCueTimer);
+    if(!edgeCue) return;
+    edgeCue.classList.remove("visible");
+    edgeCueTimer = setTimeout(() => edgeCue.classList.add("hidden"), 350);
+  }
+
   // ---- RESISTANCE / SOFTENING ----
   function smootherstep(x){
     // 0..1 with resistance near ends
@@ -591,9 +662,12 @@
   const jumpGo = document.getElementById("jumpGo");
   const jumpCancel = document.getElementById("jumpCancel");
   const hudHint = document.getElementById("hudHint");
+  const edgeCue = document.getElementById("edgeCue");
 
   const singlePageQuery = window.matchMedia("(max-width: 760px), (pointer: coarse) and (max-width: 900px)");
   let isSinglePageMode = singlePageQuery.matches;
+  let edgeCueDismissed = false;
+  let edgeCueTimer = null;
 
   // Shadow handoff bridge element (created on demand)
   let handoffEl = null;
@@ -1171,6 +1245,8 @@
   }
 
   function pointerDown(e){
+    dismissEdgeCue();
+
     // Only primary pointer
     if(e.pointerType === "mouse" && e.button !== 0) return;
 
@@ -1534,6 +1610,7 @@
 
   renderSpread();
   preloadAroundCurrent();
+  setTimeout(showEdgeCueSoon, 650);
 
   function handleModeChange(){
     const nextMode = singlePageQuery.matches;
@@ -1547,6 +1624,7 @@
     panX = 0;
     panY = 0;
     hardResetView("layout-mode-change");
+    setTimeout(showEdgeCueSoon, 450);
   }
 
   if(singlePageQuery.addEventListener){
